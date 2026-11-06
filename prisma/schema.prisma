@@ -7,167 +7,142 @@ datasource db {
   provider = "sqlite"
 }
 
-// =====================================================
-// ENUMS
-// =====================================================
-
-enum UserRole {
-  ADMIN
-  EDUCATOR
-  PARENT
-}
-
-enum AttendanceStatus {
-  PRESENT
-  ABSENT_DECLARED
-  ABSENT_UNEXCUSED
-  LATE
-}
-
-enum DeclarationSource {
-  PARENT
-  STAFF
-}
-
-// =====================================================
-// 1. AUTHENTIFICATION
-// =====================================================
-
 model User {
-  id           Int      @id @default(autoincrement())
-  name         String
-  email        String   @unique
-  passwordHash String
-  role         UserRole
-  isActive     Boolean  @default(true)
-
-  guardianProfile Guardian?
-  educatorProfile EducatorProfile?
-
-  recordedAttendances     Attendance[]         @relation("AttendanceRecorder")
-  declaredAbsences        AbsenceDeclaration[]
-  confirmedChecklistItems ChildChecklistItem[] @relation("ChecklistItemReceiver")
-
-  conversationParticipants ConversationParticipant[]
-  sentMessages             Message[]
-  createdRequests          Request[]
-  notifications            Notification[]
-
-  createdObservations        Observation[]
+  id                         Int                       @id @default(autoincrement())
+  name                       String
+  email                      String                    @unique
+  passwordHash               String
+  role                       UserRole
+  isActive                   Boolean                   @default(true)
+  declaredAbsences           AbsenceDeclaration[]
+  recordedAttendances        Attendance[]              @relation("AttendanceRecorder")
+  confirmedChecklistItems    ChildChecklistItem[]      @relation("ChecklistItemReceiver")
   createdChildNotes          ChildNote[]
+  conversationParticipants   ConversationParticipant[]
+  educatorProfile            EducatorProfile?
+  guardianProfile            Guardian?
   createdIncidents           Incident[]
+  reportedLostItems          LostItemReport[]
+  sentMessages               Message[]
+  notifications              Notification[]
+  createdObservations        Observation[]
+  publishedPhotos            Photo[]
   createdPickupNotifications PickupNotification[]
-
-  publishedPhotos   Photo[]
-  reportedLostItems LostItemReport[]
+  createdRequests            Request[]
+  createdEmergencyContacts   EmergencyContact[]
+  createdAllergies           Allergy[]
+  createdFoodRestrictions    FoodRestriction[]
+  createdPickupPeople        AuthorizedPickupPerson[]
+  createdParentInstructions  ParentInstruction[]
+  sessions                   Session[]                 @relation("UserSessions")
 }
 
-// =====================================================
-// 2. FAMILLES ET ENFANTS
-// =====================================================
+model Session {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    Int
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation("UserSessions", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
 
 model EducatorProfile {
-  id     Int    @id @default(autoincrement())
-  userId Int    @unique
-  phone  String
+  id          Int                  @id @default(autoincrement())
+  userId      Int                  @unique
+  phone       String
+  user        User                 @relation(fields: [userId], references: [id])
+  classRooms  EducatorClassRoom[]
+}
 
-  user User @relation(fields: [userId], references: [id])
+model EducatorClassRoom {
+  id          Int            @id @default(autoincrement())
+  educatorId  Int
+  classRoomId Int
+  educator    EducatorProfile @relation(fields: [educatorId], references: [id])
+  classRoom   ClassRoom      @relation(fields: [classRoomId], references: [id])
+
+  @@unique([educatorId, classRoomId])
+  @@index([classRoomId])
 }
 
 model Guardian {
-  id        Int     @id @default(autoincrement())
+  id        Int             @id @default(autoincrement())
   firstName String
   lastName  String
   phone     String
   email     String?
-  userId    Int?    @unique
-
-  user User? @relation(fields: [userId], references: [id])
-
-  children ChildGuardian[]
+  userId    Int?            @unique
+  children  ChildGuardian[]
+  user      User?           @relation(fields: [userId], references: [id])
 }
 
 model ChildGuardian {
-  id               Int     @id @default(autoincrement())
+  id               Int      @id @default(autoincrement())
   childId          Int
   guardianId       Int
-  isLegalGuardian  Boolean @default(false)
-  isPrimaryContact Boolean @default(false)
+  isLegalGuardian  Boolean  @default(false)
+  isPrimaryContact Boolean  @default(false)
   relationshipType String
-
-  child    Child    @relation(fields: [childId], references: [id])
-  guardian Guardian @relation(fields: [guardianId], references: [id])
+  guardian         Guardian @relation(fields: [guardianId], references: [id])
+  child            Child    @relation(fields: [childId], references: [id])
 
   @@unique([childId, guardianId])
 }
 
 model Child {
-  id               Int      @id @default(autoincrement())
-  firstName        String
-  lastName         String
-  birthDate        DateTime
-  photo            String?
-  enrollmentStatus String
-
-  classRoomId Int?
-  classRoom   ClassRoom? @relation(fields: [classRoomId], references: [id])
-
-  guardians ChildGuardian[]
-
-  attendances    Attendance[]
-  checklistItems ChildChecklistItem[]
-
-  conversations Conversation[]
-  requests      Request[]
-
-  observations ChildObservation[]
-  notes        ChildNote[]
-
-  emergencyContacts      EmergencyContact[]
+  id                     Int                      @id @default(autoincrement())
+  firstName              String
+  lastName               String
+  birthDate              DateTime
+  photo                  String?
+  enrollmentStatus       String
+  classRoomId            Int?
   allergies              Allergy[]
+  attendances            Attendance[]
+  authorizedPickupPeople AuthorizedPickupPerson[]
+  classRoom              ClassRoom?               @relation(fields: [classRoomId], references: [id])
+  checklistItems         ChildChecklistItem[]
+  guardians              ChildGuardian[]
+  notes                  ChildNote[]
+  observations           ChildObservation[]
+  subscriptions          ChildSubscription[]
+  conversations          Conversation[]
+  emergencyContacts      EmergencyContact[]
   foodRestrictions       FoodRestriction[]
   incidents              Incident[]
+  insuranceRecords       InsuranceRecord[]
+  invoices               Invoice[]
+  lostItemReports        LostItemReport[]
   parentInstructions     ParentInstruction[]
-  authorizedPickupPeople AuthorizedPickupPerson[]
+  photos                 Photo[]
   pickupNotifications    PickupNotification[]
-
-  subscriptions    ChildSubscription[]
-  invoices         Invoice[]
-  insuranceRecords InsuranceRecord[]
-
-  photos          Photo[]
-  lostItemReports LostItemReport[]
+  requests               Request[]
 }
 
 model ClassRoom {
-  id       Int    @id @default(autoincrement())
-  name     String
-  ageGroup Int
-  capacity Int
-
+  id         Int               @id @default(autoincrement())
+  name       String
+  ageGroup   Int
+  capacity   Int
   children   Child[]
   activities ClassActivity[]
   photos     Photo[]
+  educators  EducatorClassRoom[]
 }
 
-// =====================================================
-// 3. PRÉSENCES ET ABSENCES
-// =====================================================
-
 model Attendance {
-  id            Int              @id @default(autoincrement())
-  childId       Int
-  date          DateTime
-  status        AttendanceStatus
-  arrivalTime   DateTime?
-  departureTime DateTime?
-  recordedBy    Int
-
-  child Child @relation(fields: [childId], references: [id])
-
-  recorder User @relation("AttendanceRecorder", fields: [recordedBy], references: [id])
-
+  id                 Int                 @id @default(autoincrement())
+  childId            Int
+  date               DateTime
+  status             AttendanceStatus
+  arrivalTime        DateTime?
+  departureTime      DateTime?
+  recordedBy         Int
   absenceDeclaration AbsenceDeclaration?
+  recorder           User                @relation("AttendanceRecorder", fields: [recordedBy], references: [id])
+  child              Child               @relation(fields: [childId], references: [id])
 
   @@unique([childId, date])
 }
@@ -179,88 +154,71 @@ model AbsenceDeclaration {
   description        String?
   declaredByUserId   Int
   source             DeclarationSource
+  status             String            @default("PENDING")
   expectedReturnDate DateTime?
-
-  attendance Attendance @relation(fields: [attendanceId], references: [id])
-  declaredBy User       @relation(fields: [declaredByUserId], references: [id])
+  declaredBy         User              @relation(fields: [declaredByUserId], references: [id])
+  attendance         Attendance        @relation(fields: [attendanceId], references: [id])
 }
 
-// =====================================================
-// 4. FOURNITURES ET INSCRIPTION
-// =====================================================
-
 model RegistrationChecklist {
-  id       Int     @id @default(autoincrement())
+  id       Int             @id @default(autoincrement())
   name     String
   ageGroup Int
-  isActive Boolean @default(true)
-
-  items ChecklistItem[]
+  isActive Boolean         @default(true)
+  items    ChecklistItem[]
 }
 
 model ChecklistItem {
-  id          Int     @id @default(autoincrement())
+  id          Int                   @id @default(autoincrement())
   checklistId Int
   name        String
-  isRequired  Boolean @default(true)
-
-  checklist RegistrationChecklist @relation(fields: [checklistId], references: [id])
-
-  childItems ChildChecklistItem[]
+  isRequired  Boolean               @default(true)
+  checklist   RegistrationChecklist @relation(fields: [checklistId], references: [id])
+  childItems  ChildChecklistItem[]
 }
 
 model ChildChecklistItem {
-  id         Int       @id @default(autoincrement())
+  id         Int           @id @default(autoincrement())
   childId    Int
   itemId     Int
-  isReceived Boolean   @default(false)
+  isReceived Boolean       @default(false)
   receivedAt DateTime?
   receivedBy Int?
-
-  child Child         @relation(fields: [childId], references: [id])
-  item  ChecklistItem @relation(fields: [itemId], references: [id])
-
-  receiver User? @relation("ChecklistItemReceiver", fields: [receivedBy], references: [id])
+  receiver   User?         @relation("ChecklistItemReceiver", fields: [receivedBy], references: [id])
+  item       ChecklistItem @relation(fields: [itemId], references: [id])
+  child      Child         @relation(fields: [childId], references: [id])
 
   @@unique([childId, itemId])
 }
 
-// =====================================================
-// 5. COMMUNICATION
-// =====================================================
-
 model Conversation {
-  id        Int      @id @default(autoincrement())
-  childId   Int?
-  createdAt DateTime @default(now())
-
-  child Child? @relation(fields: [childId], references: [id])
-
+  id           Int                       @id @default(autoincrement())
+  childId      Int?
+  createdAt    DateTime                  @default(now())
+  child        Child?                    @relation(fields: [childId], references: [id])
   participants ConversationParticipant[]
   messages     Message[]
 }
 
 model ConversationParticipant {
-  id             Int @id @default(autoincrement())
+  id             Int          @id @default(autoincrement())
   conversationId Int
   userId         Int
-
-  conversation Conversation @relation(fields: [conversationId], references: [id])
-  user         User         @relation(fields: [userId], references: [id])
+  user           User         @relation(fields: [userId], references: [id])
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
 
   @@unique([conversationId, userId])
 }
 
 model Message {
-  id             Int      @id @default(autoincrement())
+  id             Int          @id @default(autoincrement())
   conversationId Int
   senderId       Int
   content        String
-  sentAt         DateTime @default(now())
-  isRead         Boolean  @default(false)
-
-  conversation Conversation @relation(fields: [conversationId], references: [id])
-  sender       User         @relation(fields: [senderId], references: [id])
+  sentAt         DateTime     @default(now())
+  isRead         Boolean      @default(false)
+  sender         User         @relation(fields: [senderId], references: [id])
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
 }
 
 model Request {
@@ -271,9 +229,8 @@ model Request {
   description String
   status      String
   createdAt   DateTime @default(now())
-
-  child   Child? @relation(fields: [childId], references: [id])
-  creator User   @relation(fields: [createdBy], references: [id])
+  creator     User     @relation(fields: [createdBy], references: [id])
+  child       Child?   @relation(fields: [childId], references: [id])
 }
 
 model Announcement {
@@ -289,55 +246,45 @@ model Notification {
   message   String
   status    String
   createdAt DateTime @default(now())
-
-  user User @relation(fields: [userId], references: [id])
+  user      User     @relation(fields: [userId], references: [id])
 }
 
-// =====================================================
-// 6. ACTIVITÉS ET OBSERVATIONS
-// =====================================================
-
 model Activity {
-  id          Int      @id @default(autoincrement())
-  title       String
-  description String
-  category    String
-  date        DateTime
-
+  id              Int             @id @default(autoincrement())
+  title           String
+  description     String
+  category        String
+  date            DateTime
   classActivities ClassActivity[]
 }
 
 model ClassActivity {
-  id         Int @id @default(autoincrement())
+  id         Int       @id @default(autoincrement())
   activityId Int
   classId    Int
-
-  activity  Activity  @relation(fields: [activityId], references: [id])
-  classRoom ClassRoom @relation(fields: [classId], references: [id])
+  classRoom  ClassRoom @relation(fields: [classId], references: [id])
+  activity   Activity  @relation(fields: [activityId], references: [id])
 
   @@unique([activityId, classId])
 }
 
 model Observation {
-  id          Int      @id @default(autoincrement())
+  id          Int                @id @default(autoincrement())
   title       String
   description String
   createdBy   Int
-  createdAt   DateTime @default(now())
-
-  creator User @relation(fields: [createdBy], references: [id])
-
-  children ChildObservation[]
+  createdAt   DateTime           @default(now())
+  children    ChildObservation[]
+  creator     User               @relation(fields: [createdBy], references: [id])
 }
 
 model ChildObservation {
-  id                 Int     @id @default(autoincrement())
+  id                 Int         @id @default(autoincrement())
   observationId      Int
   childId            Int
-  isSharedWithParent Boolean @default(false)
-
-  observation Observation @relation(fields: [observationId], references: [id])
-  child       Child       @relation(fields: [childId], references: [id])
+  isSharedWithParent Boolean     @default(false)
+  child              Child       @relation(fields: [childId], references: [id])
+  observation        Observation @relation(fields: [observationId], references: [id])
 
   @@unique([observationId, childId])
 }
@@ -348,14 +295,9 @@ model ChildNote {
   createdBy      Int
   content        String
   isConfidential Boolean @default(false)
-
-  child   Child @relation(fields: [childId], references: [id])
-  creator User  @relation(fields: [createdBy], references: [id])
+  creator        User    @relation(fields: [createdBy], references: [id])
+  child          Child   @relation(fields: [childId], references: [id])
 }
-
-// =====================================================
-// 7. SANTÉ ET SÉCURITÉ
-// =====================================================
 
 model EmergencyContact {
   id           Int    @id @default(autoincrement())
@@ -363,8 +305,9 @@ model EmergencyContact {
   name         String
   relationship String
   phone        String
-
-  child Child @relation(fields: [childId], references: [id])
+  createdBy    Int?
+  creator      User?  @relation(fields: [createdBy], references: [id])
+  child        Child  @relation(fields: [childId], references: [id])
 }
 
 model Allergy {
@@ -372,16 +315,18 @@ model Allergy {
   childId     Int
   description String
   severity    String
-
-  child Child @relation(fields: [childId], references: [id])
+  createdBy   Int?
+  creator     User?  @relation(fields: [createdBy], references: [id])
+  child       Child  @relation(fields: [childId], references: [id])
 }
 
 model FoodRestriction {
   id          Int    @id @default(autoincrement())
   childId     Int
   description String
-
-  child Child @relation(fields: [childId], references: [id])
+  createdBy   Int?
+  creator     User?  @relation(fields: [createdBy], references: [id])
+  child       Child  @relation(fields: [childId], references: [id])
 }
 
 model Incident {
@@ -392,9 +337,8 @@ model Incident {
   parentInformed Boolean
   createdAt      DateTime @default(now())
   createdBy      Int
-
-  child   Child @relation(fields: [childId], references: [id])
-  creator User  @relation(fields: [createdBy], references: [id])
+  creator        User     @relation(fields: [createdBy], references: [id])
+  child          Child    @relation(fields: [childId], references: [id])
 }
 
 model ParentInstruction {
@@ -402,8 +346,9 @@ model ParentInstruction {
   childId   Int
   content   String
   createdAt DateTime @default(now())
-
-  child Child @relation(fields: [childId], references: [id])
+  createdBy Int?
+  creator   User?    @relation(fields: [createdBy], references: [id])
+  child     Child    @relation(fields: [childId], references: [id])
 }
 
 model AuthorizedPickupPerson {
@@ -412,8 +357,9 @@ model AuthorizedPickupPerson {
   name         String
   relationship String
   phone        String
-
-  child Child @relation(fields: [childId], references: [id])
+  createdBy    Int?
+  creator      User?  @relation(fields: [createdBy], references: [id])
+  child        Child  @relation(fields: [childId], references: [id])
 }
 
 model PickupNotification {
@@ -422,49 +368,40 @@ model PickupNotification {
   personName String
   pickupDate DateTime
   createdBy  Int
-
-  child   Child @relation(fields: [childId], references: [id])
-  creator User  @relation(fields: [createdBy], references: [id])
+  creator    User     @relation(fields: [createdBy], references: [id])
+  child      Child    @relation(fields: [childId], references: [id])
 }
 
-// =====================================================
-// 8. ABONNEMENTS ET FINANCES
-// =====================================================
-
 model SubscriptionPlan {
-  id        Int     @id @default(autoincrement())
+  id        Int                 @id @default(autoincrement())
   name      String
   startTime String
   endTime   String
   price     Decimal
-
-  children ChildSubscription[]
+  children  ChildSubscription[]
 }
 
 model ChildSubscription {
-  id          Int       @id @default(autoincrement())
+  id          Int              @id @default(autoincrement())
   childId     Int
   planId      Int
   agreedPrice Decimal
   startDate   DateTime
   endDate     DateTime?
-
-  child Child            @relation(fields: [childId], references: [id])
-  plan  SubscriptionPlan @relation(fields: [planId], references: [id])
+  plan        SubscriptionPlan @relation(fields: [planId], references: [id])
+  child       Child            @relation(fields: [childId], references: [id])
 }
 
 model Invoice {
-  id          Int       @id @default(autoincrement())
+  id          Int           @id @default(autoincrement())
   childId     Int
   totalAmount Decimal
   status      String
   issueDate   DateTime
   dueDate     DateTime?
-
-  child Child @relation(fields: [childId], references: [id])
-
-  items    InvoiceItem[]
-  payments Payment[]
+  child       Child         @relation(fields: [childId], references: [id])
+  items       InvoiceItem[]
+  payments    Payment[]
 }
 
 model InvoiceItem {
@@ -474,8 +411,7 @@ model InvoiceItem {
   quantity    Int
   unitPrice   Decimal
   total       Decimal
-
-  invoice Invoice @relation(fields: [invoiceId], references: [id])
+  invoice     Invoice @relation(fields: [invoiceId], references: [id])
 }
 
 model Payment {
@@ -484,8 +420,7 @@ model Payment {
   amount      Decimal
   paymentDate DateTime
   method      String
-
-  invoice Invoice @relation(fields: [invoiceId], references: [id])
+  invoice     Invoice  @relation(fields: [invoiceId], references: [id])
 }
 
 model InsuranceRecord {
@@ -496,54 +431,45 @@ model InsuranceRecord {
   startDate DateTime
   endDate   DateTime
   status    String
-
-  child Child @relation(fields: [childId], references: [id])
+  child     Child    @relation(fields: [childId], references: [id])
 }
 
-// =====================================================
-// 9. ÉVÉNEMENTS ET MÉDIAS
-// =====================================================
-
 model Event {
-  id          Int      @id @default(autoincrement())
+  id          Int                     @id @default(autoincrement())
   title       String
   description String
   eventDate   DateTime
   price       Decimal
-
-  providers EventExternalProvider[]
+  providers   EventExternalProvider[]
 }
 
 model ExternalProvider {
-  id      Int    @id @default(autoincrement())
+  id      Int                     @id @default(autoincrement())
   name    String
   service String
   phone   String
-
-  events EventExternalProvider[]
+  events  EventExternalProvider[]
 }
 
 model EventExternalProvider {
   eventId    Int
   providerId Int
-
-  event    Event            @relation(fields: [eventId], references: [id])
-  provider ExternalProvider @relation(fields: [providerId], references: [id])
+  provider   ExternalProvider @relation(fields: [providerId], references: [id])
+  event      Event            @relation(fields: [eventId], references: [id])
 
   @@id([eventId, providerId])
 }
 
 model Photo {
-  id         Int      @id @default(autoincrement())
+  id         Int        @id @default(autoincrement())
   childId    Int?
   classId    Int?
   filePath   String
   uploadedBy Int
-  createdAt  DateTime @default(now())
-
-  child     Child?     @relation(fields: [childId], references: [id])
-  classRoom ClassRoom? @relation(fields: [classId], references: [id])
-  uploader  User       @relation(fields: [uploadedBy], references: [id])
+  createdAt  DateTime   @default(now())
+  uploader   User       @relation(fields: [uploadedBy], references: [id])
+  classRoom  ClassRoom? @relation(fields: [classId], references: [id])
+  child      Child?     @relation(fields: [childId], references: [id])
 }
 
 model FoundObject {
@@ -562,9 +488,25 @@ model LostItemReport {
   category    String
   reportedAt  DateTime @default(now())
   status      String
+  reportedBy  Int
+  reporter    User     @relation(fields: [reportedBy], references: [id])
+  child       Child    @relation(fields: [childId], references: [id])
+}
 
-  child    Child @relation(fields: [childId], references: [id])
-  reporter User  @relation(fields: [reportedBy], references: [id])
+enum UserRole {
+  ADMIN
+  EDUCATOR
+  PARENT
+}
 
-  reportedBy Int
+enum AttendanceStatus {
+  PRESENT
+  ABSENT_DECLARED
+  ABSENT_UNEXCUSED
+  LATE
+}
+
+enum DeclarationSource {
+  PARENT
+  STAFF
 }
