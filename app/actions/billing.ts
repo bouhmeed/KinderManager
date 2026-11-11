@@ -1,6 +1,7 @@
 "use server";
 
 import { prisma } from "@/lib/prisma";
+import type { InvoiceStatus, PaymentMethod } from "@/generated/prisma/enums";
 import { requireAuth } from "@/lib/auth";
 import { getParentChildIds } from "@/lib/permissions";
 import { parseDay } from "@/lib/dates";
@@ -19,6 +20,7 @@ function parseAmount(value: string): number | null {
 }
 
 const INVOICE_STATUSES = ["UNPAID", "PAID", "CANCELLED"] as const;
+const PAYMENT_METHODS = ["ESPECES", "CARTE", "VIREMENT", "CHEQUE"] as const;
 
 // ---------- Plans ----------
 
@@ -197,7 +199,9 @@ export async function getInvoices(filters: {
   return prisma.invoice.findMany({
     where: {
       ...scopeWhere,
-      ...(filters.status ? { status: filters.status } : {}),
+      ...(filters.status
+        ? { status: filters.status as InvoiceStatus }
+        : {}),
       ...(filters.childName
         ? {
             child: {
@@ -366,7 +370,12 @@ export async function addPayment(formData: FormData) {
   const paymentDateRaw = formData.get("paymentDate") as string;
   const paymentDate = paymentDateRaw ? new Date(paymentDateRaw) : new Date();
 
-  if (!Number.isInteger(invoiceId) || amount === null || amount <= 0 || !method) {
+  if (
+    !Number.isInteger(invoiceId) ||
+    amount === null ||
+    amount <= 0 ||
+    !PAYMENT_METHODS.includes(method as (typeof PAYMENT_METHODS)[number])
+  ) {
     return { error: "Paramètres invalides" };
   }
   if (isNaN(paymentDate.getTime())) {
@@ -391,11 +400,16 @@ export async function addPayment(formData: FormData) {
 
   await prisma.$transaction(async (tx) => {
     await tx.payment.create({
-      data: { invoiceId, amount, paymentDate, method },
+      data: {
+        invoiceId,
+        amount,
+        paymentDate,
+        method: method as PaymentMethod,
+      },
     });
 
     const newPaid = paid + amount;
-    const newStatus =
+    const newStatus: InvoiceStatus =
       newPaid >= Number(invoice.totalAmount) - 0.001 ? "PAID" : "UNPAID";
     if (newStatus !== invoice.status) {
       await tx.invoice.update({
@@ -424,6 +438,9 @@ export async function updateInvoiceStatus(id: number, status: string) {
     return { error: "Facture non trouvée" };
   }
 
-  await prisma.invoice.update({ where: { id }, data: { status } });
+  await prisma.invoice.update({
+    where: { id },
+    data: { status: status as InvoiceStatus },
+  });
   return { success: true };
 }

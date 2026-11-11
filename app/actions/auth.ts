@@ -11,6 +11,8 @@ import {
   setSessionCookie,
   deleteSessionCookie,
   cleanupExpiredSessions,
+  getSession,
+  hashToken,
 } from "@/lib/auth";
 import { loginSchema, registerSchema } from "@/lib/validations";
 
@@ -42,6 +44,18 @@ export async function loginAction(formData: FormData) {
     };
   }
 
+  if (user.role === "EDUCATOR") {
+    const profile = await prisma.educatorProfile.findUnique({
+      where: { userId: user.id },
+      select: { isActive: true },
+    });
+    if (profile && !profile.isActive) {
+      return {
+        error: "Account is inactive",
+      };
+    }
+  }
+
   const isValidPassword = await verifyPassword(password, user.passwordHash);
 
   if (!isValidPassword) {
@@ -52,6 +66,12 @@ export async function loginAction(formData: FormData) {
 
   // Cleanup expired sessions
   await cleanupExpiredSessions();
+
+  // Track last login
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { lastLoginAt: new Date() },
+  });
 
   // Create new session
   const token = await generateSessionToken();
@@ -69,6 +89,23 @@ export async function logoutAction() {
     await deleteSession(token);
     await deleteSessionCookie();
   }
+
+  return { success: true };
+}
+
+export async function logoutOtherSessionsAction() {
+  const session = await getSession();
+  if (!session) {
+    return { error: "Non authentifié" };
+  }
+
+  const currentHash = await hashToken(session.token);
+  await prisma.session.deleteMany({
+    where: {
+      userId: session.userId,
+      NOT: { tokenHash: currentHash },
+    },
+  });
 
   return { success: true };
 }

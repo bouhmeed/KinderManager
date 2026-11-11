@@ -219,6 +219,48 @@ export async function createGuardianAccount(
   return { success: true };
 }
 
+export async function resetGuardianAccountPassword(
+  guardianId: number,
+  formData: FormData
+) {
+  await requireRole("ADMIN");
+
+  if (!Number.isInteger(guardianId)) {
+    return { error: "Paramètres invalides" };
+  }
+
+  const guardian = await prisma.guardian.findUnique({
+    where: { id: guardianId },
+    include: { user: { select: { id: true } } },
+  });
+  if (!guardian) {
+    return { error: "Tuteur non trouvé" };
+  }
+  if (!guardian.user) {
+    return { error: "Ce tuteur n'a pas de compte lié" };
+  }
+
+  const password = (formData.get("newPassword") as string) || "";
+  if (password.length < 8) {
+    return { error: "Le mot de passe doit contenir au moins 8 caractères" };
+  }
+
+  const passwordHash = await hashPassword(password);
+
+  await prisma.$transaction(async (tx) => {
+    await tx.user.update({
+      where: { id: guardian.user!.id },
+      data: { passwordHash },
+    });
+    // Force re-login on all devices
+    await tx.session.deleteMany({
+      where: { userId: guardian.user!.id },
+    });
+  });
+
+  return { success: true };
+}
+
 export async function updateGuardian(id: number, formData: FormData) {
   await requireRole("ADMIN");
 

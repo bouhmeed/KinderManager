@@ -1,35 +1,23 @@
 "use server";
 
 import { prisma } from "@/lib/prisma";
+import type {
+  AllergySeverity,
+  InsuranceStatus,
+} from "@/generated/prisma/enums";
 import { requireAuth } from "@/lib/auth";
-import {
-  getEducatorClassRoomIds,
-  getParentChildIds,
-} from "@/lib/permissions";
+import { canAccessChild } from "@/lib/permissions";
 import { parseDay } from "@/lib/dates";
 
 type SessionUser = { id: number; role: string };
 
-async function canAccessChild(
-  user: SessionUser,
-  child: { id: number; classRoomId: number | null }
-): Promise<boolean> {
-  if (user.role === "ADMIN") {
-    return true;
-  }
-  if (user.role === "EDUCATOR") {
-    if (!child.classRoomId) {
-      return false;
-    }
-    const classRoomIds = await getEducatorClassRoomIds(user.id);
-    return classRoomIds.includes(child.classRoomId);
-  }
-  if (user.role === "PARENT") {
-    const childIds = await getParentChildIds(user.id);
-    return childIds.includes(child.id);
-  }
-  return false;
-}
+const ALLERGY_SEVERITIES = ["MILD", "MODERATE", "SEVERE"] as const;
+const INSURANCE_STATUSES = [
+  "EN_ATTENTE",
+  "ACTIF",
+  "EXPIRE",
+  "SUSPENDU",
+] as const;
 
 async function requireChildAccess(childId: number) {
   const user = await requireAuth();
@@ -161,12 +149,22 @@ export async function createAllergy(formData: FormData) {
   const description = ((formData.get("description") as string) || "").trim();
   const severity = ((formData.get("severity") as string) || "").trim();
 
-  if (!description || !severity) {
+  if (
+    !description ||
+    !ALLERGY_SEVERITIES.includes(
+      severity as (typeof ALLERGY_SEVERITIES)[number]
+    )
+  ) {
     return { error: "Tous les champs sont obligatoires" };
   }
 
   await prisma.allergy.create({
-    data: { childId, description, severity, createdBy: user.id },
+    data: {
+      childId,
+      description,
+      severity: severity as AllergySeverity,
+      createdBy: user.id,
+    },
   });
   return { success: true };
 }
@@ -271,12 +269,27 @@ export async function createInsuranceRecord(formData: FormData) {
   const startDate = parseDay(formData.get("startDate") as string);
   const endDate = parseDay(formData.get("endDate") as string);
 
-  if (!provider || !reference || !status || !startDate || !endDate) {
+  if (
+    !provider ||
+    !reference ||
+    !INSURANCE_STATUSES.includes(
+      status as (typeof INSURANCE_STATUSES)[number]
+    ) ||
+    !startDate ||
+    !endDate
+  ) {
     return { error: "Tous les champs sont obligatoires" };
   }
 
   await prisma.insuranceRecord.create({
-    data: { childId, provider, reference, status, startDate, endDate },
+    data: {
+      childId,
+      provider,
+      reference,
+      status: status as InsuranceStatus,
+      startDate,
+      endDate,
+    },
   });
   return { success: true };
 }

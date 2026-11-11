@@ -14,21 +14,31 @@ model User {
   passwordHash               String
   role                       UserRole
   isActive                   Boolean                   @default(true)
+  createdAt                  DateTime                  @default(now())
+  lastLoginAt                DateTime?
   declaredAbsences           AbsenceDeclaration[]
+  reviewedAbsences           AbsenceDeclaration[]      @relation("AbsenceReviewer")
   recordedAttendances        Attendance[]              @relation("AttendanceRecorder")
-  confirmedChecklistItems    ChildChecklistItem[]      @relation("ChecklistItemReceiver")
-  createdChildNotes          ChildNote[]
+  attendanceHistoryChanges   AttendanceHistory[]       @relation("AttendanceHistoryChanger")
+  verifiedDeclarationDays    AbsenceDeclarationDay[]   @relation("DeclarationDayVerifier")
   conversationParticipants   ConversationParticipant[]
   educatorProfile            EducatorProfile?
   guardianProfile            Guardian?
   createdIncidents           Incident[]
-  reportedLostItems          LostItemReport[]
   sentMessages               Message[]
   notifications              Notification[]
-  createdObservations        Observation[]
   publishedPhotos            Photo[]
   createdPickupNotifications PickupNotification[]
   createdRequests            Request[]
+  reviewedRequests           Request[]                 @relation("RequestReviewer")
+  createdTimetableVersions   TimetableVersion[]        @relation("TimetableCreator")
+  createdScheduleExceptions  ClassScheduleException[]  @relation("ExceptionCreator")
+  createdActivities          Activity[]                @relation("ActivityCreator")
+  createdActivitySchedules   ActivitySchedule[]        @relation("ScheduleCreator")
+  confirmedParticipations    ActivityParticipation[]   @relation("ParticipationConfirmer")
+  participationHistory       ParticipationHistory[]    @relation("ParticipationHistoryChanger")
+  requestedEnrollments       ClubEnrollment[]          @relation("EnrollmentRequester")
+  decidedEnrollments         ClubEnrollment[]          @relation("EnrollmentDecider")
   createdEmergencyContacts   EmergencyContact[]
   createdAllergies           Allergy[]
   createdFoodRestrictions    FoodRestriction[]
@@ -38,30 +48,34 @@ model User {
 }
 
 model Session {
-  id        String   @id @default(cuid())
-  tokenHash String   @unique
-  userId    Int
-  expiresAt DateTime
-  createdAt DateTime @default(now())
-  user      User     @relation("UserSessions", fields: [userId], references: [id], onDelete: Cascade)
+  id         String    @id @default(cuid())
+  tokenHash  String    @unique
+  userId     Int
+  expiresAt  DateTime
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+  user       User      @relation("UserSessions", fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
 }
 
 model EducatorProfile {
-  id          Int                  @id @default(autoincrement())
-  userId      Int                  @unique
-  phone       String
-  user        User                 @relation(fields: [userId], references: [id])
-  classRooms  EducatorClassRoom[]
+  id         Int                 @id @default(autoincrement())
+  userId     Int                 @unique
+  phone      String
+  isActive   Boolean             @default(true)
+  user       User                @relation(fields: [userId], references: [id])
+  classRooms EducatorClassRoom[]
+  activitySchedules ActivitySchedule[]
+  occurrences       ScheduleOccurrence[]
 }
 
 model EducatorClassRoom {
-  id          Int            @id @default(autoincrement())
+  id          Int             @id @default(autoincrement())
   educatorId  Int
   classRoomId Int
   educator    EducatorProfile @relation(fields: [educatorId], references: [id])
-  classRoom   ClassRoom      @relation(fields: [classRoomId], references: [id])
+  classRoom   ClassRoom       @relation(fields: [classRoomId], references: [id])
 
   @@unique([educatorId, classRoomId])
   @@index([classRoomId])
@@ -89,6 +103,7 @@ model ChildGuardian {
   child            Child    @relation(fields: [childId], references: [id])
 
   @@unique([childId, guardianId])
+  @@index([guardianId])
 }
 
 model Child {
@@ -97,16 +112,15 @@ model Child {
   lastName               String
   birthDate              DateTime
   photo                  String?
-  enrollmentStatus       String
+  enrollmentStatus       EnrollmentStatus
   classRoomId            Int?
   allergies              Allergy[]
+  absenceDeclarations    AbsenceDeclaration[]
+  attendanceHistory      AttendanceHistory[]
   attendances            Attendance[]
   authorizedPickupPeople AuthorizedPickupPerson[]
   classRoom              ClassRoom?               @relation(fields: [classRoomId], references: [id])
-  checklistItems         ChildChecklistItem[]
   guardians              ChildGuardian[]
-  notes                  ChildNote[]
-  observations           ChildObservation[]
   subscriptions          ChildSubscription[]
   conversations          Conversation[]
   emergencyContacts      EmergencyContact[]
@@ -114,81 +128,112 @@ model Child {
   incidents              Incident[]
   insuranceRecords       InsuranceRecord[]
   invoices               Invoice[]
-  lostItemReports        LostItemReport[]
   parentInstructions     ParentInstruction[]
   photos                 Photo[]
   pickupNotifications    PickupNotification[]
   requests               Request[]
+  activityParticipations ActivityParticipation[]
+  clubEnrollments        ClubEnrollment[]
+
+  @@index([classRoomId])
+  @@index([enrollmentStatus])
 }
 
 model ClassRoom {
-  id         Int               @id @default(autoincrement())
+  id         Int                 @id @default(autoincrement())
   name       String
   ageGroup   Int
   capacity   Int
   children   Child[]
-  activities ClassActivity[]
   photos     Photo[]
   educators  EducatorClassRoom[]
+  scheduleExceptions ClassScheduleException[]
+  activitySchedules  ActivitySchedule[]
+  occurrences        ScheduleOccurrence[]
 }
 
 model Attendance {
-  id                 Int                 @id @default(autoincrement())
-  childId            Int
-  date               DateTime
-  status             AttendanceStatus
-  arrivalTime        DateTime?
-  departureTime      DateTime?
-  recordedBy         Int
-  absenceDeclaration AbsenceDeclaration?
-  recorder           User                @relation("AttendanceRecorder", fields: [recordedBy], references: [id])
-  child              Child               @relation(fields: [childId], references: [id])
+  id              Int                     @id @default(autoincrement())
+  childId         Int
+  date            DateTime
+  status          AttendanceStatus
+  arrivalTime     DateTime?
+  departureTime   DateTime?
+  recordedBy      Int
+  declarationDays AbsenceDeclarationDay[]
+  history         AttendanceHistory[]
+  recorder        User                    @relation("AttendanceRecorder", fields: [recordedBy], references: [id])
+  child           Child                   @relation(fields: [childId], references: [id])
 
   @@unique([childId, date])
+  @@index([date])
+  @@index([status])
 }
 
 model AbsenceDeclaration {
-  id                 Int               @id @default(autoincrement())
-  attendanceId       Int               @unique
-  reason             String?
-  description        String?
-  declaredByUserId   Int
-  source             DeclarationSource
-  status             String            @default("PENDING")
-  expectedReturnDate DateTime?
-  declaredBy         User              @relation(fields: [declaredByUserId], references: [id])
-  attendance         Attendance        @relation(fields: [attendanceId], references: [id])
+  id               Int                     @id @default(autoincrement())
+  childId          Int
+  declaredByUserId Int
+  source           DeclarationSource
+  reason           String?
+  description      String?
+  status           AbsenceStatus           @default(PENDING)
+  startDate        DateTime
+  endDate          DateTime
+  reviewedBy       Int?
+  reviewedAt       DateTime?
+  declaredBy       User                    @relation(fields: [declaredByUserId], references: [id])
+  reviewer         User?                   @relation("AbsenceReviewer", fields: [reviewedBy], references: [id])
+  child            Child                   @relation(fields: [childId], references: [id])
+  days             AbsenceDeclarationDay[]
+
+  @@index([status])
+  @@index([declaredByUserId])
+  @@index([childId])
 }
 
-model RegistrationChecklist {
-  id       Int             @id @default(autoincrement())
-  name     String
-  ageGroup Int
-  isActive Boolean         @default(true)
-  items    ChecklistItem[]
+enum DeclarationDayStatus {
+  PENDING
+  CONFIRMED
+  NOT_APPLICABLE
 }
 
-model ChecklistItem {
-  id          Int                   @id @default(autoincrement())
-  checklistId Int
-  name        String
-  isRequired  Boolean               @default(true)
-  checklist   RegistrationChecklist @relation(fields: [checklistId], references: [id])
-  childItems  ChildChecklistItem[]
+model AbsenceDeclarationDay {
+  id            Int                  @id @default(autoincrement())
+  declarationId Int
+  attendanceId  Int                  @unique
+  date          DateTime
+  status        DeclarationDayStatus @default(PENDING)
+  verifiedBy    Int?
+  verifiedAt    DateTime?
+  note          String?
+  declaration   AbsenceDeclaration   @relation(fields: [declarationId], references: [id], onDelete: Cascade)
+  attendance    Attendance           @relation(fields: [attendanceId], references: [id])
+  verifier      User?                @relation("DeclarationDayVerifier", fields: [verifiedBy], references: [id])
+
+  @@unique([declarationId, date])
+  @@index([date])
+  @@index([verifiedBy])
 }
 
-model ChildChecklistItem {
-  id         Int           @id @default(autoincrement())
-  childId    Int
-  itemId     Int
-  isReceived Boolean       @default(false)
-  receivedAt DateTime?
-  receivedBy Int?
-  receiver   User?         @relation("ChecklistItemReceiver", fields: [receivedBy], references: [id])
-  item       ChecklistItem @relation(fields: [itemId], references: [id])
-  child      Child         @relation(fields: [childId], references: [id])
+model AttendanceHistory {
+  id           Int               @id @default(autoincrement())
+  childId      Int
+  attendanceId Int
+  date         DateTime
+  oldStatus    AttendanceStatus?
+  newStatus    AttendanceStatus
+  reason       String?
+  changedBy    Int
+  changedAt    DateTime          @default(now())
+  child        Child             @relation(fields: [childId], references: [id])
+  attendance   Attendance        @relation(fields: [attendanceId], references: [id])
+  changer      User              @relation("AttendanceHistoryChanger", fields: [changedBy], references: [id])
 
-  @@unique([childId, itemId])
+  @@index([childId])
+  @@index([attendanceId])
+  @@index([date])
+  @@index([changedBy])
 }
 
 model Conversation {
@@ -219,18 +264,30 @@ model Message {
   isRead         Boolean      @default(false)
   sender         User         @relation(fields: [senderId], references: [id])
   conversation   Conversation @relation(fields: [conversationId], references: [id])
+
+  @@index([conversationId, sentAt])
+  @@index([senderId])
 }
 
 model Request {
-  id          Int      @id @default(autoincrement())
+  id          Int           @id @default(autoincrement())
   childId     Int?
   createdBy   Int
-  type        String
+  type        RequestType
   description String
-  status      String
-  createdAt   DateTime @default(now())
-  creator     User     @relation(fields: [createdBy], references: [id])
-  child       Child?   @relation(fields: [childId], references: [id])
+  status      RequestStatus @default(PENDING)
+  response    String?
+  reviewedBy  Int?
+  reviewedAt  DateTime?
+  createdAt   DateTime      @default(now())
+  creator     User          @relation(fields: [createdBy], references: [id])
+  reviewer    User?         @relation("RequestReviewer", fields: [reviewedBy], references: [id])
+  child       Child?        @relation(fields: [childId], references: [id])
+
+  @@index([status])
+  @@index([childId])
+  @@index([createdBy])
+  @@index([reviewedBy])
 }
 
 model Announcement {
@@ -241,62 +298,273 @@ model Announcement {
 }
 
 model Notification {
-  id        Int      @id @default(autoincrement())
+  id        Int                @id @default(autoincrement())
   userId    Int
   message   String
-  status    String
-  createdAt DateTime @default(now())
-  user      User     @relation(fields: [userId], references: [id])
+  type      String?
+  href      String?
+  status    NotificationStatus @default(UNREAD)
+  createdAt DateTime           @default(now())
+  user      User               @relation(fields: [userId], references: [id])
+
+  @@index([userId, status])
 }
 
 model Activity {
-  id              Int             @id @default(autoincrement())
+  id              Int                @id @default(autoincrement())
   title           String
-  description     String
-  category        String
-  date            DateTime
-  classActivities ClassActivity[]
+  description     String?
+  category        ActivityCategory   @default(OTHER)
+  color           String?
+  isActive        Boolean            @default(true)
+  createdBy       Int
+  createdAt       DateTime           @default(now())
+  creator         User               @relation("ActivityCreator", fields: [createdBy], references: [id])
+  timetableSlots  TimetableSlot[]
+  exceptionItems  ScheduleExceptionItem[]
+  schedules       ActivitySchedule[]
+  occurrences     ScheduleOccurrence[]
+  clubEnrollments ClubEnrollment[]
 }
 
-model ClassActivity {
-  id         Int       @id @default(autoincrement())
-  activityId Int
-  classId    Int
-  classRoom  ClassRoom @relation(fields: [classId], references: [id])
-  activity   Activity  @relation(fields: [activityId], references: [id])
-
-  @@unique([activityId, classId])
+enum ActivityCategory {
+  EDUCATIONAL
+  CARE
+  CLUB
+  OTHER
 }
 
-model Observation {
-  id          Int                @id @default(autoincrement())
-  title       String
-  description String
-  createdBy   Int
-  createdAt   DateTime           @default(now())
-  children    ChildObservation[]
-  creator     User               @relation(fields: [createdBy], references: [id])
+enum OccurrenceKind {
+  TIMETABLE_SLOT
+  ACTIVITY_SESSION
+  CLUB_SESSION
 }
 
-model ChildObservation {
-  id                 Int         @id @default(autoincrement())
-  observationId      Int
+enum OccurrenceStatus {
+  PLANNED
+  CANCELLED
+  COMPLETED
+}
+
+enum ParticipationStatus {
+  PENDING
+  PRESENT
+  PARTIAL
+  ABSENT
+  CANCELLED
+}
+
+model ActivityParticipation {
+  id                 Int                  @id @default(autoincrement())
+  occurrenceId       Int
   childId            Int
-  isSharedWithParent Boolean     @default(false)
-  child              Child       @relation(fields: [childId], references: [id])
-  observation        Observation @relation(fields: [observationId], references: [id])
+  status             ParticipationStatus  @default(PENDING)
+  manualStatus       ParticipationStatus?
+  autoStatus         ParticipationStatus?
+  autoMinutes        Int?
+  manualMinutes      Int?
+  confirmedBy        Int?
+  confirmedAt        DateTime?
+  overrideReason     String?
+  educatorRemark     String?
+  remarkVisibleToParents Boolean          @default(false)
+  calculatedAt       DateTime?
+  history            ParticipationHistory[]
+  occurrence         ScheduleOccurrence   @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
+  child              Child                @relation(fields: [childId], references: [id])
+  confirmer          User?                @relation("ParticipationConfirmer", fields: [confirmedBy], references: [id])
 
-  @@unique([observationId, childId])
+  @@unique([occurrenceId, childId])
+  @@index([childId])
+  @@index([occurrenceId])
 }
 
-model ChildNote {
-  id             Int     @id @default(autoincrement())
-  childId        Int
-  createdBy      Int
-  content        String
-  isConfidential Boolean @default(false)
-  creator        User    @relation(fields: [createdBy], references: [id])
-  child          Child   @relation(fields: [childId], references: [id])
+model ParticipationHistory {
+  id              Int                  @id @default(autoincrement())
+  participationId Int
+  oldStatus       ParticipationStatus?
+  newStatus       ParticipationStatus
+  oldMinutes      Int?
+  newMinutes      Int?
+  reason          String
+  changedBy       Int
+  changedAt       DateTime             @default(now())
+  participation   ActivityParticipation @relation(fields: [participationId], references: [id], onDelete: Cascade)
+  changer         User                 @relation("ParticipationHistoryChanger", fields: [changedBy], references: [id])
+
+  @@index([participationId])
+}
+
+enum ClubEnrollmentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+model ClubEnrollment {
+  id           Int                  @id @default(autoincrement())
+  childId      Int
+  activityId   Int
+  status       ClubEnrollmentStatus @default(PENDING)
+  requestedBy  Int?
+  decidedBy    Int?
+  decidedAt    DateTime?
+  decisionNote String?
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+  child        Child                @relation(fields: [childId], references: [id], onDelete: Cascade)
+  activity     Activity             @relation(fields: [activityId], references: [id], onDelete: Cascade)
+  requester    User?                @relation("EnrollmentRequester", fields: [requestedBy], references: [id])
+  decider      User?                @relation("EnrollmentDecider", fields: [decidedBy], references: [id])
+
+  @@unique([childId, activityId])
+  @@index([status])
+  @@index([activityId])
+}
+
+model ActivitySchedule {
+  id           Int             @id @default(autoincrement())
+  activityId   Int
+  classRoomId  Int?
+  weekday      Weekday?
+  startMinutes Int
+  endMinutes   Int
+  validFrom    DateTime
+  validTo      DateTime?
+  educatorId   Int?
+  isCancelled  Boolean         @default(false)
+  createdBy    Int
+  createdAt    DateTime        @default(now())
+  activity     Activity        @relation(fields: [activityId], references: [id], onDelete: Cascade)
+  classRoom    ClassRoom?      @relation(fields: [classRoomId], references: [id])
+  educator     EducatorProfile? @relation(fields: [educatorId], references: [id])
+  creator      User            @relation("ScheduleCreator", fields: [createdBy], references: [id])
+
+  @@index([activityId, weekday])
+  @@index([classRoomId])
+}
+
+model ScheduleOccurrence {
+  id                   Int               @id @default(autoincrement())
+  classRoomId          Int
+  date                 DateTime
+  kind                 OccurrenceKind
+  title                String
+  startMinutes         Int
+  endMinutes           Int
+  activityId           Int?
+  sourceType           String
+  sourceId             Int?
+  educatorId           Int?
+  status               OccurrenceStatus  @default(PLANNED)
+  tracksParticipation  Boolean           @default(false)
+  manuallyEdited       Boolean           @default(false)
+  educatorNote         String?
+  noteVisibleToParents Boolean           @default(false)
+  dedupeKey            String            @unique
+  classRoom            ClassRoom         @relation(fields: [classRoomId], references: [id])
+  activity             Activity?         @relation(fields: [activityId], references: [id])
+  educator             EducatorProfile?  @relation(fields: [educatorId], references: [id])
+  participations       ActivityParticipation[]
+  photos               Photo[]
+
+  @@index([classRoomId, date])
+  @@index([date])
+  @@index([activityId])
+}
+
+enum ScheduleExceptionAction {
+  MODIFY_SLOT
+  REMOVE_SLOT
+  ADD_SLOT
+}
+
+model ClassScheduleException {
+  id          Int                      @id @default(autoincrement())
+  classRoomId Int
+  validFrom   DateTime
+  validTo     DateTime
+  reason      String?
+  createdBy   Int
+  createdAt   DateTime                 @default(now())
+  classRoom   ClassRoom                @relation(fields: [classRoomId], references: [id])
+  creator     User                     @relation("ExceptionCreator", fields: [createdBy], references: [id])
+  items       ScheduleExceptionItem[]
+
+  @@index([classRoomId, validFrom, validTo])
+}
+
+model ScheduleExceptionItem {
+  id           Int                     @id @default(autoincrement())
+  exceptionId  Int
+  action       ScheduleExceptionAction
+  sourceSlotId Int?
+  weekday      Weekday?
+  kind         TimetableSlotKind?
+  title        String?
+  startMinutes Int?
+  endMinutes   Int?
+  activityId   Int?
+  notes        String?
+  exception    ClassScheduleException @relation(fields: [exceptionId], references: [id], onDelete: Cascade)
+  sourceSlot   TimetableSlot?          @relation(fields: [sourceSlotId], references: [id])
+  activity     Activity?               @relation(fields: [activityId], references: [id])
+
+  @@index([exceptionId])
+}
+
+enum Weekday {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+  SUNDAY
+}
+
+enum TimetableSlotKind {
+  ACTIVITY
+  MEAL
+  NAP
+  BREAK
+  ARRIVAL
+  DEPARTURE
+  OTHER
+}
+
+model TimetableVersion {
+  id        Int             @id @default(autoincrement())
+  label     String
+  validFrom DateTime
+  validTo   DateTime?
+  isActive  Boolean         @default(true)
+  createdBy Int
+  createdAt DateTime        @default(now())
+  creator   User            @relation("TimetableCreator", fields: [createdBy], references: [id])
+  slots     TimetableSlot[]
+
+  @@index([validFrom, validTo])
+}
+
+model TimetableSlot {
+  id           Int               @id @default(autoincrement())
+  timetableId  Int
+  weekday      Weekday
+  position     Int               @default(0)
+  kind         TimetableSlotKind @default(OTHER)
+  title        String
+  startMinutes Int
+  endMinutes   Int
+  activityId   Int?
+  notes        String?
+  timetable    TimetableVersion  @relation(fields: [timetableId], references: [id], onDelete: Cascade)
+  activity     Activity?         @relation(fields: [activityId], references: [id])
+  exceptionItems ScheduleExceptionItem[]
+
+  @@index([timetableId, weekday, position])
+  @@index([activityId])
 }
 
 model EmergencyContact {
@@ -311,13 +579,13 @@ model EmergencyContact {
 }
 
 model Allergy {
-  id          Int    @id @default(autoincrement())
+  id          Int             @id @default(autoincrement())
   childId     Int
   description String
-  severity    String
+  severity    AllergySeverity
   createdBy   Int?
-  creator     User?  @relation(fields: [createdBy], references: [id])
-  child       Child  @relation(fields: [childId], references: [id])
+  creator     User?           @relation(fields: [createdBy], references: [id])
+  child       Child           @relation(fields: [childId], references: [id])
 }
 
 model FoodRestriction {
@@ -396,12 +664,16 @@ model Invoice {
   id          Int           @id @default(autoincrement())
   childId     Int
   totalAmount Decimal
-  status      String
+  status      InvoiceStatus @default(UNPAID)
   issueDate   DateTime
   dueDate     DateTime?
   child       Child         @relation(fields: [childId], references: [id])
   items       InvoiceItem[]
   payments    Payment[]
+
+  @@index([childId])
+  @@index([status])
+  @@index([issueDate])
 }
 
 model InvoiceItem {
@@ -415,82 +687,107 @@ model InvoiceItem {
 }
 
 model Payment {
-  id          Int      @id @default(autoincrement())
+  id          Int           @id @default(autoincrement())
   invoiceId   Int
   amount      Decimal
   paymentDate DateTime
-  method      String
-  invoice     Invoice  @relation(fields: [invoiceId], references: [id])
+  method      PaymentMethod
+  invoice     Invoice       @relation(fields: [invoiceId], references: [id])
+
+  @@index([invoiceId])
 }
 
 model InsuranceRecord {
-  id        Int      @id @default(autoincrement())
+  id        Int             @id @default(autoincrement())
   childId   Int
   provider  String
   reference String
   startDate DateTime
   endDate   DateTime
-  status    String
-  child     Child    @relation(fields: [childId], references: [id])
-}
-
-model Event {
-  id          Int                     @id @default(autoincrement())
-  title       String
-  description String
-  eventDate   DateTime
-  price       Decimal
-  providers   EventExternalProvider[]
-}
-
-model ExternalProvider {
-  id      Int                     @id @default(autoincrement())
-  name    String
-  service String
-  phone   String
-  events  EventExternalProvider[]
-}
-
-model EventExternalProvider {
-  eventId    Int
-  providerId Int
-  provider   ExternalProvider @relation(fields: [providerId], references: [id])
-  event      Event            @relation(fields: [eventId], references: [id])
-
-  @@id([eventId, providerId])
+  status    InsuranceStatus
+  child     Child           @relation(fields: [childId], references: [id])
 }
 
 model Photo {
-  id         Int        @id @default(autoincrement())
-  childId    Int?
-  classId    Int?
-  filePath   String
-  uploadedBy Int
-  createdAt  DateTime   @default(now())
-  uploader   User       @relation(fields: [uploadedBy], references: [id])
-  classRoom  ClassRoom? @relation(fields: [classId], references: [id])
-  child      Child?     @relation(fields: [childId], references: [id])
+  id             Int               @id @default(autoincrement())
+  childId        Int?
+  classId        Int?
+  occurrenceId   Int?
+  filePath       String
+  caption        String?
+  takenAt        DateTime?
+  audience       PhotoAudience     @default(STAFF_ONLY)
+  uploadedBy     Int
+  createdAt      DateTime          @default(now())
+  uploader       User              @relation(fields: [uploadedBy], references: [id])
+  classRoom      ClassRoom?        @relation(fields: [classId], references: [id])
+  child          Child?            @relation(fields: [childId], references: [id])
+  occurrence     ScheduleOccurrence? @relation(fields: [occurrenceId], references: [id])
 }
 
-model FoundObject {
-  id          Int      @id @default(autoincrement())
-  description String
-  category    String
-  photo       String?
-  foundDate   DateTime
-  status      String
+enum PhotoAudience {
+  STAFF_ONLY
+  CLASS_CHILDREN
 }
 
-model LostItemReport {
-  id          Int      @id @default(autoincrement())
-  childId     Int
-  description String
-  category    String
-  reportedAt  DateTime @default(now())
-  status      String
-  reportedBy  Int
-  reporter    User     @relation(fields: [reportedBy], references: [id])
-  child       Child    @relation(fields: [childId], references: [id])
+enum EnrollmentStatus {
+  INSCRIT
+  EN_ATTENTE
+  INACTIF
+}
+
+enum AbsenceStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum RequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  IN_PROGRESS
+  READY
+  COMPLETED
+  CANCELLED
+}
+
+enum RequestType {
+  SORTIE_ANTICIPEE
+  DOCUMENTS
+  REUNION
+  AUTRE
+}
+
+enum NotificationStatus {
+  UNREAD
+  READ
+}
+
+enum InvoiceStatus {
+  UNPAID
+  PAID
+  CANCELLED
+}
+
+enum InsuranceStatus {
+  EN_ATTENTE
+  ACTIF
+  EXPIRE
+  SUSPENDU
+}
+
+enum AllergySeverity {
+  MILD
+  MODERATE
+  SEVERE
+}
+
+enum PaymentMethod {
+  ESPECES
+  CARTE
+  VIREMENT
+  CHEQUE
 }
 
 enum UserRole {
@@ -500,8 +797,10 @@ enum UserRole {
 }
 
 enum AttendanceStatus {
+  NOT_RECORDED
   PRESENT
   ABSENT_DECLARED
+  ABSENT_EXCUSED
   ABSENT_UNEXCUSED
   LATE
 }

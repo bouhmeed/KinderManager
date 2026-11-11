@@ -121,6 +121,7 @@ export async function updateEducator(id: number, formData: FormData) {
   const email = formData.get("email") as string;
   const phone = formData.get("phone") as string;
   const isActive = formData.get("isActive") === "true";
+  const profileIsActive = formData.get("profileIsActive") === "true";
   const password = formData.get("password") as string;
 
   const validation = educatorUpdateSchema.safeParse({
@@ -172,8 +173,12 @@ export async function updateEducator(id: number, formData: FormData) {
 
     await tx.educatorProfile.upsert({
       where: { userId: id },
-      update: { phone: validation.data.phone },
-      create: { userId: id, phone: validation.data.phone },
+      update: { phone: validation.data.phone, isActive: profileIsActive },
+      create: {
+        userId: id,
+        phone: validation.data.phone,
+        isActive: profileIsActive,
+      },
     });
   });
 

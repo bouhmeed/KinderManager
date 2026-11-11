@@ -6,6 +6,10 @@ import { getParentChildIds } from "@/lib/permissions";
 import { mkdir, writeFile } from "fs/promises";
 import path from "path";
 import { randomBytes } from "crypto";
+import type {
+  AllergySeverity,
+  EnrollmentStatus,
+} from "@/generated/prisma/enums";
 import {
   childSchema,
   childIdentitySchema,
@@ -14,6 +18,7 @@ import {
 } from "@/lib/validations-children";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const ALLERGY_SEVERITIES = ["MILD", "MODERATE", "SEVERE"] as const;
 
 const PHOTO_DIR = path.join(process.cwd(), "public", "uploads", "children");
 const PHOTO_TYPES: Record<string, string> = {
@@ -128,15 +133,22 @@ export async function createChild(formData: FormData) {
   }
 
   // ---------- Santé initiale (allergies + contacts d'urgence) ----------
-  const allergies: { description: string; severity: string }[] = [];
+  const allergies: { description: string; severity: AllergySeverity }[] = [];
   for (let i = 0; i < 10; i++) {
     const description = (
       (formData.get(`allergyDesc_${i}`) as string) || ""
     ).trim();
     if (!description) break;
-    const severity =
-      ((formData.get(`allergySeverity_${i}`) as string) || "").trim() ||
-      "MODÉRÉE";
+    const severityRaw = (
+      (formData.get(`allergySeverity_${i}`) as string) || ""
+    ).trim();
+    const severity = (
+      ALLERGY_SEVERITIES.includes(
+        severityRaw as (typeof ALLERGY_SEVERITIES)[number]
+      )
+        ? severityRaw
+        : "MODERATE"
+    ) as AllergySeverity;
     allergies.push({ description, severity });
   }
 
@@ -336,26 +348,18 @@ export async function updateChild(id: number, formData: FormData) {
     return { error: photoResult.error };
   }
 
-  const data: {
-    firstName: string;
-    lastName: string;
-    birthDate: Date;
-    enrollmentStatus: string;
-    classRoomId: number | undefined;
-    photo?: string | null;
-  } = {
+  const data = {
     firstName: validation.data.firstName,
     lastName: validation.data.lastName,
     birthDate: new Date(validation.data.birthDate),
-    enrollmentStatus: validation.data.enrollmentStatus,
+    enrollmentStatus: validation.data.enrollmentStatus as EnrollmentStatus,
     classRoomId: validation.data.classRoomId,
+    ...(photoResult.photo
+      ? { photo: photoResult.photo }
+      : formData.get("removePhoto") === "on"
+        ? { photo: null }
+        : {}),
   };
-
-  if (photoResult.photo) {
-    data.photo = photoResult.photo;
-  } else if (formData.get("removePhoto") === "on") {
-    data.photo = null;
-  }
 
   const child = await prisma.child.update({
     where: { id },

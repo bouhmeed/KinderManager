@@ -72,6 +72,15 @@ export async function getSession(): Promise<{ userId: number; token: string } | 
     return null;
   }
 
+  // Throttled lastUsedAt update (max once per 5 minutes)
+  const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
+  if (!session.lastUsedAt || session.lastUsedAt.getTime() < fiveMinutesAgo) {
+    await prisma.session.update({
+      where: { id: session.id },
+      data: { lastUsedAt: new Date() },
+    });
+  }
+
   return { userId: session.userId, token };
 }
 
@@ -89,6 +98,7 @@ export async function getCurrentUser() {
       email: true,
       role: true,
       isActive: true,
+      lastLoginAt: true,
     },
   });
 

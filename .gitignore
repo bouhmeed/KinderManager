@@ -49,3 +49,6 @@ dev.db
 # IDE / tool dirs
 .claude/
 .windsurf/
+
+# gallery uploads (served via /api/photos)
+/uploads/

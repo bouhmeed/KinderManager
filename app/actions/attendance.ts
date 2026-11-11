@@ -5,32 +5,33 @@ import { requireAuth } from "@/lib/auth";
 import {
   getEducatorClassRoomIds,
   getParentChildIds,
+  assertClassRoomAccess,
+  assertChildAccess,
+  canAccessChild,
 } from "@/lib/permissions";
 import { parseDay } from "@/lib/dates";
+import { tunisTimeToUtc } from "@/lib/tunis-time";
+import type { Prisma } from "@/generated/prisma/client";
+import { recomputeDeclarationStatus } from "@/lib/absence-utils";
+import { recalcAfterAttendance } from "@/lib/participation";
 
-const ATTENDANCE_STATUSES = [
+// Statuses an educator/admin can write. ABSENT_DECLARED is set by the
+// declaration workflow; NOT_RECORDED is implicit (no row = "À vérifier").
+const WRITABLE_STATUSES = [
   "PRESENT",
-  "ABSENT_DECLARED",
-  "ABSENT_UNEXCUSED",
   "LATE",
+  "ABSENT_EXCUSED",
+  "ABSENT_UNEXCUSED",
 ] as const;
 
-type AttendanceStatus = (typeof ATTENDANCE_STATUSES)[number];
+type WritableStatus = (typeof WRITABLE_STATUSES)[number];
 
-async function assertClassRoomAccess(
-  user: { id: number; role: string },
-  classRoomId: number
-): Promise<void> {
-  if (user.role === "PARENT") {
-    throw new Error("Forbidden");
-  }
-  if (user.role === "EDUCATOR") {
-    const allowed = await getEducatorClassRoomIds(user.id);
-    if (!allowed.includes(classRoomId)) {
-      throw new Error("Forbidden");
-    }
-  }
-}
+const declarationDayInclude = {
+  include: {
+    declaration: { select: { id: true, status: true, reason: true } },
+    verifier: { select: { name: true } },
+  },
+} as const;
 
 export async function getAttendanceHome() {
   const user = await requireAuth();
@@ -106,11 +107,7 @@ export async function getClassRoomAttendance(
       childId: { in: classRoom.children.map((c) => c.id) },
       date,
     },
-    include: {
-      absenceDeclaration: {
-        select: { id: true, status: true, reason: true },
-      },
-    },
+    include: { declarationDays: declarationDayInclude },
   });
 
   const attendanceByChild = new Map(
@@ -126,26 +123,82 @@ export async function getClassRoomAttendance(
     date: dateValue,
     children: classRoom.children.map((child) => ({
       ...child,
+      // null => "À vérifier" (no attendance row). Never default to PRESENT.
       attendance: attendanceByChild.get(child.id) ?? null,
     })),
   };
 }
 
+// Times are "HH:MM" wall-clock values interpreted in Africa/Tunis on
+// the given day (dateValue is the Tunis calendar day).
+function parseTime(dateValue: string, time?: string) {
+  if (!time) return null;
+  return tunisTimeToUtc(dateValue, time);
+}
+
+function sameInstant(a: Date | null, b: Date | null): boolean {
+  return (a?.getTime() ?? null) === (b?.getTime() ?? null);
+}
+
+// Syncs a PENDING declaration day after an educator/admin records attendance.
+// Called inside the attendance transaction.
+async function syncDeclarationDay(
+  tx: Prisma.TransactionClient,
+  attendanceId: number,
+  newStatus: WritableStatus,
+  userId: number
+): Promise<void> {
+  const day = await tx.absenceDeclarationDay.findUnique({
+    where: { attendanceId },
+  });
+  if (!day || day.status !== "PENDING") {
+    return;
+  }
+
+  let dayStatus: "CONFIRMED" | "NOT_APPLICABLE";
+  let note: string | null = null;
+
+  if (newStatus === "ABSENT_EXCUSED") {
+    dayStatus = "CONFIRMED";
+  } else {
+    dayStatus = "NOT_APPLICABLE";
+    note =
+      newStatus === "ABSENT_UNEXCUSED"
+        ? "Absence non excusée"
+        : "Enfant présent";
+  }
+
+  await tx.absenceDeclarationDay.update({
+    where: { id: day.id },
+    data: {
+      status: dayStatus,
+      note,
+      verifiedBy: dayStatus === "CONFIRMED" ? userId : null,
+      verifiedAt: dayStatus === "CONFIRMED" ? new Date() : null,
+    },
+  });
+
+  await recomputeDeclarationStatus(tx, day.declarationId);
+}
+
+interface AttendanceRecordInput {
+  childId: number;
+  status: string;
+  arrivalTime?: string;
+  departureTime?: string;
+  reason?: string;
+}
+
 export async function saveClassRoomAttendance(
   classRoomId: number,
   dateValue: string,
-  records: {
-    childId: number;
-    status: string;
-    arrivalTime?: string;
-    departureTime?: string;
-  }[]
+  records: AttendanceRecordInput[]
 ) {
   const user = await requireAuth();
   await assertClassRoomAccess(user, classRoomId);
 
   const date = parseDay(dateValue);
-  if (!date || !Array.isArray(records) || records.length === 0) {
+  if (!date || !Array.isArray(records)) {
     return { error: "Paramètres invalides" };
   }
 
@@ -160,48 +213,173 @@ export async function saveClassRoomAttendance(
 
   const classChildIds = new Set(classRoom.children.map((c) => c.id));
 
-  for (const record of records) {
+  const validRecords = records.filter((r) => r.status);
+  for (const record of validRecords) {
     if (
       !Number.isInteger(record.childId) ||
       !classChildIds.has(record.childId) ||
-      !ATTENDANCE_STATUSES.includes(record.status as AttendanceStatus)
+      !WRITABLE_STATUSES.includes(record.status as WritableStatus)
     ) {
       return { error: "Enregistrement invalide" };
     }
   }
 
-  const parseTime = (time?: string) => {
-    if (!time) return null;
-    const parsed = new Date(`${dateValue}T${time}`);
-    return isNaN(parsed.getTime()) ? null : parsed;
-  };
+  // Detect modifications of existing records -> a reason is mandatory.
+  const existing = await prisma.attendance.findMany({
+    where: {
+      date,
+      childId: { in: validRecords.map((r) => r.childId) },
+    },
+  });
+  const existingByChild = new Map(existing.map((a) => [a.childId, a]));
 
-  await prisma.$transaction(
-    records.map((record) =>
-      prisma.attendance.upsert({
+  const hasCorrection = validRecords.some((record) => {
+    const prev = existingByChild.get(record.childId);
+    if (!prev) return false;
+    return (
+      prev.status !== record.status ||
+      !sameInstant(prev.arrivalTime, parseTime(dateValue, record.arrivalTime)) ||
+      !sameInstant(prev.departureTime, parseTime(dateValue, record.departureTime))
+    );
+  });
+
+  const reason = (records[0]?.reason || "").trim() || null;
+  if (hasCorrection && !reason) {
+    return {
+      error:
+        "Une raison est obligatoire pour modifier des présences déjà enregistrées",
+    };
+  }
+
+  await prisma.$transaction(async (tx) => {
+    for (const record of validRecords) {
+      const status = record.status as WritableStatus;
+      const arrivalTime = parseTime(dateValue, record.arrivalTime);
+      const departureTime = parseTime(dateValue, record.departureTime);
+      const prev = existingByChild.get(record.childId);
+
+      const changed =
+        prev &&
+        (prev.status !== status ||
+          !sameInstant(prev.arrivalTime, arrivalTime) ||
+          !sameInstant(prev.departureTime, departureTime));
+
+      const attendance = await tx.attendance.upsert({
         where: {
-          childId_date: {
-            childId: record.childId,
-            date,
-          },
+          childId_date: { childId: record.childId, date },
         },
         create: {
           childId: record.childId,
           date,
-          status: record.status as AttendanceStatus,
-          arrivalTime: parseTime(record.arrivalTime),
-          departureTime: parseTime(record.departureTime),
+          status,
+          arrivalTime,
+          departureTime,
           recordedBy: user.id,
         },
         update: {
-          status: record.status as AttendanceStatus,
-          arrivalTime: parseTime(record.arrivalTime),
-          departureTime: parseTime(record.departureTime),
+          status,
+          arrivalTime,
+          departureTime,
           recordedBy: user.id,
         },
-      })
-    )
-  );
+      });
+
+      if (changed) {
+        await tx.attendanceHistory.create({
+          data: {
+            childId: record.childId,
+            attendanceId: attendance.id,
+            date,
+            oldStatus: prev.status,
+            newStatus: status,
+            reason,
+            changedBy: user.id,
+          },
+        });
+      }
+
+      await syncDeclarationDay(tx, attendance.id, status, user.id);
+    }
+
+    await recalcAfterAttendance(tx, classRoomId, date);
+  });
+
+  return { success: true };
+}
+
+// Correct a single attendance record. Reason is mandatory; every change is
+// written to AttendanceHistory. Parents are rejected by assertChildAccess.
+export async function correctAttendance(
+  childId: number,
+  dateValue: string,
+  data: {
+    status: string;
+    arrivalTime?: string;
+    departureTime?: string;
+  },
+  reason: string
+) {
+  const user = await requireAuth();
+
+  const targetChild = await prisma.child.findUnique({
+    where: { id: childId },
+    select: { id: true, classRoomId: true },
+  });
+  if (!targetChild) {
+    return { error: "Enfant non trouvé" };
+  }
+  await assertChildAccess(user, targetChild);
+
+  const date = parseDay(dateValue);
+  const trimmedReason = (reason || "").trim();
+  if (!date || !trimmedReason) {
+    return { error: "Paramètres invalides" };
+  }
+  if (!WRITABLE_STATUSES.includes(data.status as WritableStatus)) {
+    return { error: "Statut invalide" };
+  }
+
+  const status = data.status as WritableStatus;
+  const arrivalTime = parseTime(dateValue, data.arrivalTime);
+  const departureTime = parseTime(dateValue, data.departureTime);
+
+  const prev = await prisma.attendance.findUnique({
+    where: { childId_date: { childId, date } },
+  });
+
+  await prisma.$transaction(async (tx) => {
+    const attendance = await tx.attendance.upsert({
+      where: { childId_date: { childId, date } },
+      create: {
+        childId,
+        date,
+        status,
+        arrivalTime,
+        departureTime,
+        recordedBy: user.id,
+      },
+      update: {
+        status,
+        arrivalTime,
+        departureTime,
+        recordedBy: user.id,
+      },
+    });
+
+    await tx.attendanceHistory.create({
+      data: {
+        childId,
+        attendanceId: attendance.id,
+        date,
+        oldStatus: prev?.status ?? null,
+        newStatus: status,
+        reason: trimmedReason,
+        changedBy: user.id,
+      },
+    });
+
+    await syncDeclarationDay(tx, attendance.id, status, user.id);
+  });
 
   return { success: true };
 }
@@ -260,9 +438,7 @@ export async function getAttendanceHistory(filters: {
         },
       },
       recorder: { select: { name: true } },
-      absenceDeclaration: {
-        select: { id: true, status: true, reason: true },
-      },
+      declarationDays: declarationDayInclude,
     },
     orderBy: { date: "desc" },
     take: 300,
@@ -294,32 +470,17 @@ export async function getChildAttendance(childId: number) {
     throw new Error("Enfant non trouvé");
   }
 
-  if (user.role === "EDUCATOR") {
-    const allowed = await getEducatorClassRoomIds(user.id);
-    const childClassRoomId = await prisma.child.findUnique({
-      where: { id: childId },
-      select: { classRoomId: true },
-    });
-    if (
-      !childClassRoomId?.classRoomId ||
-      !allowed.includes(childClassRoomId.classRoomId)
-    ) {
-      throw new Error("Forbidden");
-    }
-  } else if (user.role === "PARENT") {
-    const childIds = await getParentChildIds(user.id);
-    if (!childIds.includes(childId)) {
-      throw new Error("Forbidden");
-    }
+  const allowed = await canAccessChild(user, {
+    id: child.id,
+    classRoomId: child.classRoom?.id ?? null,
+  });
+  if (!allowed) {
+    throw new Error("Forbidden");
   }
 
   const attendances = await prisma.attendance.findMany({
     where: { childId },
-    include: {
-      absenceDeclaration: {
-        select: { id: true, status: true, reason: true },
-      },
-    },
+    include: { declarationDays: declarationDayInclude },
     orderBy: { date: "desc" },
     take: 100,
   });

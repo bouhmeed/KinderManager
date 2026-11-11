@@ -6,7 +6,9 @@ export const childSchema = z.object({
   birthDate: z.string().refine((val) => !isNaN(Date.parse(val)), {
     message: "Date de naissance invalide",
   }),
-  enrollmentStatus: z.string().min(1, "Le statut d'inscription est requis"),
+  enrollmentStatus: z.enum(["INSCRIT", "EN_ATTENTE", "INACTIF"], {
+    message: "Statut d'inscription invalide",
+  }),
   classRoomId: z.number().optional(),
 });
 

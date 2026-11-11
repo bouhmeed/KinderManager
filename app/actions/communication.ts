@@ -6,13 +6,47 @@ import {
   getEducatorClassRoomIds,
   getParentChildIds,
 } from "@/lib/permissions";
+import type { RequestStatus, RequestType } from "@/generated/prisma/enums";
 
-const REQUEST_STATUSES = ["PENDING", "APPROVED", "REJECTED"] as const;
+const REQUEST_STATUSES = [
+  "PENDING",
+  "APPROVED",
+  "REJECTED",
+  "IN_PROGRESS",
+  "READY",
+  "COMPLETED",
+  "CANCELLED",
+] as const;
+const LEGACY_REQUEST_STATUSES = ["PENDING", "APPROVED", "REJECTED"] as const;
+const DOCUMENT_REQUEST_STATUSES = [
+  "PENDING",
+  "IN_PROGRESS",
+  "READY",
+  "COMPLETED",
+  "REJECTED",
+] as const;
+
+const REQUEST_STATUS_LABELS: Record<string, string> = {
+  PENDING: "en attente",
+  APPROVED: "approuvée",
+  REJECTED: "rejetée",
+  IN_PROGRESS: "en cours de traitement",
+  READY: "prête à récupérer",
+  COMPLETED: "terminée",
+  CANCELLED: "annulée",
+};
+
+// Allowed document-request transitions per role
+// ADMIN: all; EDUCATOR: PENDING->IN_PROGRESS, IN_PROGRESS->READY only
+const DOCUMENT_EDUCATOR_TRANSITIONS: Record<string, string[]> = {
+  PENDING: ["IN_PROGRESS"],
+  IN_PROGRESS: ["READY"],
+};
 const REQUEST_TYPES = [
-  "Sortie anticipée",
-  "Documents",
-  "Réunion",
-  "Autre",
+  "SORTIE_ANTICIPEE",
+  "DOCUMENTS",
+  "REUNION",
+  "AUTRE",
 ] as const;
 
 // ============================================================
@@ -107,6 +141,8 @@ export async function sendNotification(formData: FormData) {
 
   const targetUserId = parseInt(formData.get("userId") as string);
   const message = ((formData.get("message") as string) || "").trim();
+  const type = ((formData.get("type") as string) || "").trim() || null;
+  const href = ((formData.get("href") as string) || "").trim() || null;
 
   if (!Number.isInteger(targetUserId) || !message) {
     return { error: "Paramètres invalides" };
@@ -121,7 +157,7 @@ export async function sendNotification(formData: FormData) {
   }
 
   await prisma.notification.create({
-    data: { userId: targetUserId, message, status: "UNREAD" },
+    data: { userId: targetUserId, message, type, href, status: "UNREAD" },
   });
   return { success: true };
 }
@@ -153,7 +189,9 @@ export async function getRequests(filters: { status?: string } = {}) {
     };
   } else if (user.role === "EDUCATOR") {
     const childIds = await getEducatorVisibleChildIds(user.id);
-    scopeWhere = { childId: { in: childIds } };
+    scopeWhere = {
+      OR: [{ createdBy: user.id }, { childId: { in: childIds } }],
+    };
   } else {
     if (user.role !== "ADMIN") {
       throw new Error("Forbidden");
@@ -163,7 +201,9 @@ export async function getRequests(filters: { status?: string } = {}) {
   return prisma.request.findMany({
     where: {
       ...scopeWhere,
-      ...(filters.status ? { status: filters.status } : {}),
+      ...(filters.status
+        ? { status: filters.status as RequestStatus }
+        : {}),
     },
     include: {
       child: {
@@ -175,6 +215,7 @@ export async function getRequests(filters: { status?: string } = {}) {
         },
       },
       creator: { select: { id: true, name: true, role: true } },
+      reviewer: { select: { id: true, name: true } },
     },
     orderBy: { createdAt: "desc" },
     take: 200,
@@ -199,6 +240,7 @@ export async function getRequest(id: number) {
         },
       },
       creator: { select: { id: true, name: true, role: true } },
+      reviewer: { select: { id: true, name: true } },
     },
   });
   if (!request) {
@@ -214,6 +256,9 @@ export async function getRequest(id: number) {
       throw new Error("Forbidden");
     }
   } else if (user.role === "EDUCATOR") {
+    if (request.createdBy === user.id) {
+      return request;
+    }
     if (!request.childId) {
       throw new Error("Forbidden");
     }
@@ -243,6 +288,19 @@ export async function getRequestableChildren() {
       },
     });
   }
+  if (user.role === "EDUCATOR") {
+    const childIds = await getEducatorVisibleChildIds(user.id);
+    return prisma.child.findMany({
+      where: { id: { in: childIds } },
+      orderBy: { lastName: "asc" },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        classRoom: { select: { name: true } },
+      },
+    });
+  }
   if (user.role === "ADMIN") {
     return prisma.child.findMany({
       orderBy: { lastName: "asc" },
@@ -259,7 +317,11 @@ export async function getRequestableChildren() {
 
 export async function createRequest(formData: FormData) {
   const user = await requireAuth();
-  if (user.role !== "PARENT" && user.role !== "ADMIN") {
+  if (
+    user.role !== "PARENT" &&
+    user.role !== "ADMIN" &&
+    user.role !== "EDUCATOR"
+  ) {
     return { error: "Action non autorisée" };
   }
 
@@ -293,13 +355,22 @@ export async function createRequest(formData: FormData) {
         return { error: "Vous ne pouvez créer une demande que pour vos enfants" };
       }
     }
+    if (user.role === "EDUCATOR") {
+      const childIds = await getEducatorVisibleChildIds(user.id);
+      if (!childIds.includes(childId)) {
+        return {
+          error:
+            "Vous ne pouvez créer une demande que pour les enfants de vos classes",
+        };
+      }
+    }
   }
 
   const request = await prisma.request.create({
     data: {
       childId,
       createdBy: user.id,
-      type,
+      type: type as RequestType,
       description,
       status: "PENDING",
     },
@@ -308,7 +379,11 @@ export async function createRequest(formData: FormData) {
   return { success: true, requestId: request.id };
 }
 
-export async function updateRequestStatus(id: number, status: string) {
+export async function updateRequestStatus(
+  id: number,
+  status: string,
+  response?: string
+) {
   const user = await requireAuth();
   if (user.role !== "ADMIN" && user.role !== "EDUCATOR") {
     return { error: "Action non autorisée" };
@@ -329,6 +404,46 @@ export async function updateRequestStatus(id: number, status: string) {
     return { error: "Demande non trouvée" };
   }
 
+  const isDocumentRequest = request.type === "DOCUMENTS";
+  const newStatus = status as RequestStatus;
+  const trimmedResponse = (response || "").trim();
+
+  if (isDocumentRequest) {
+    if (
+      !DOCUMENT_REQUEST_STATUSES.includes(
+        newStatus as (typeof DOCUMENT_REQUEST_STATUSES)[number]
+      )
+    ) {
+      return { error: "Statut invalide pour une demande de documents" };
+    }
+
+    if (user.role === "EDUCATOR") {
+      const allowed = DOCUMENT_EDUCATOR_TRANSITIONS[request.status] ?? [];
+      if (!allowed.includes(newStatus)) {
+        return {
+          error:
+            "Transition non autorisée : l'éducateur peut seulement prendre en charge (en cours) puis marquer la demande comme prête",
+        };
+      }
+    } else {
+      // ADMIN — all transitions allowed
+    }
+
+    if (newStatus === "REJECTED" && !trimmedResponse) {
+      return { error: "Un motif de rejet est obligatoire" };
+    }
+  } else {
+    // Legacy requests: only PENDING/APPROVED/REJECTED
+    if (
+      !LEGACY_REQUEST_STATUSES.includes(
+        newStatus as (typeof LEGACY_REQUEST_STATUSES)[number]
+      )
+    ) {
+      return { error: "Statut invalide pour ce type de demande" };
+    }
+  }
+
+  // Educator class scoping (both workflows)
   if (user.role === "EDUCATOR") {
     if (!request.childId || !request.child?.classRoomId) {
       return { error: "Action non autorisée" };
@@ -339,17 +454,53 @@ export async function updateRequestStatus(id: number, status: string) {
     }
   }
 
+  const isReset = newStatus === "PENDING" && request.status !== "PENDING";
+  const statusLabel = REQUEST_STATUS_LABELS[newStatus] ?? newStatus;
+
   await prisma.$transaction(async (tx) => {
-    await tx.request.update({ where: { id }, data: { status } });
+    await tx.request.update({
+      where: { id },
+      data: {
+        status: newStatus,
+        response: isReset ? null : trimmedResponse || null,
+        reviewedBy: isReset ? null : user.id,
+        reviewedAt: isReset ? null : new Date(),
+      },
+    });
     await tx.notification.create({
       data: {
         userId: request.createdBy,
-        message: `Votre demande #${request.id} a été ${
-          status === "APPROVED" ? "approuvée" : status === "REJECTED" ? "rejetée" : "mise à jour"
-        }.`,
+        message: `Votre demande #${request.id} est maintenant ${statusLabel}.${
+          trimmedResponse ? ` Réponse : ${trimmedResponse}` : ""
+        }`,
         status: "UNREAD",
       },
     });
+  });
+
+  return { success: true };
+}
+
+export async function cancelRequest(id: number) {
+  const user = await requireAuth();
+  if (!Number.isInteger(id)) {
+    return { error: "Paramètres invalides" };
+  }
+
+  const request = await prisma.request.findUnique({ where: { id } });
+  if (!request) {
+    return { error: "Demande non trouvée" };
+  }
+  if (request.createdBy !== user.id) {
+    return { error: "Vous ne pouvez annuler que vos propres demandes" };
+  }
+  if (request.status !== "PENDING") {
+    return { error: "Seule une demande en attente peut être annulée" };
+  }
+
+  await prisma.request.update({
+    where: { id },
+    data: { status: "CANCELLED" },
   });
 
   return { success: true };

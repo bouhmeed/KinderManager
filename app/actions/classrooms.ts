@@ -28,11 +28,6 @@ export async function getClassRoom(id: number) {
       children: {
         orderBy: { lastName: "asc" },
       },
-      activities: {
-        include: {
-          activity: true,
-        },
-      },
       educators: {
         include: {
           educator: {
